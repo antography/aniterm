@@ -1,3 +1,7 @@
-tmp/
+tmp/*
 *.exe
 *frame*/
+tmp/*
+test/
+eva/
+*dist*
