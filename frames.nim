@@ -1,8 +1,22 @@
 import nimPNG, slappy, times,
-  strformat, os, terminal, sequtils, algorithm, system
+  strformat, os, terminal, sequtils, algorithm, system, strutils, 
+  base64
+
+# Make hardcoded values easier to find
+var
+  framefolder: string = "./eva2"
+  soundfile: string = "tmp/eva.wav"
+  loopAudio: bool = true
+
+  framerate: int = 24
+  sleeptime: int = 92500
+
+  doCondense: bool = true
+  readCondensed: bool = true
+
 
 # load all the frames
-proc frameLoader(folder: string): seq[string] =
+proc frameLoader(folder: string, condense: bool, readCond: bool): seq[string] =
   var 
     frames : seq[string]
     requested : seq[string] 
@@ -17,29 +31,71 @@ proc frameLoader(folder: string): seq[string] =
       height = frm.height
       data = frm.data
       pxSeq = distribute(toseq(data), width * height)
+      pxSeqRows = distribute(pxSeq, height)
       buffer: string = ""
       counter: int = 0
-      
-    for pixel in pxSeq:
-      if counter == width:
-        buffer.add "\n"
-        counter = 0
-      buffer.add "\e[38;2;" & fmt"{int(byte(pixel[0]))};{int(byte(pixel[1]))};{int(byte(pixel[2]))}m█"
-      
-      counter += 1
+
+    for j, row in pxSeqRows:
+      # Skip every other row
+      if ((j) mod 2) != 1 :
+        for i, pixel in row:
+          if counter == width:
+            buffer.add "\n"
+            counter = 0
+          var 
+            nxtrowPx: seq[char]
+          if j + 1 < height:
+            nxtrowPx = pxSeqRows[j + 1][i]
+            buffer.add "\e[38;2;" & fmt"{int(byte(pixel[0]))};{int(byte(pixel[1]))};{int(byte(pixel[2]))}m" & "\e[48;2;" & fmt"{int(byte(nxtrowPx[0]))};{int(byte(nxtrowPx[1]))};{int(byte(nxtrowPx[2]))}m▀"
+          
+          counter += 1
     frames.add buffer
 
-  for i, frame in requested.sorted:
-    echo fmt"Loading frame {i}/{len(requested)}"
-    loadFrame(frame)
-  return frames
+  if not readCond:
+    for i, frame in requested.sorted:
+      echo fmt"Loading frame {i}/{len(requested)}"
+      loadFrame(frame)
+    
+    if condense:
+      var buffer: string
+      for frame in frames:
+        buffer.add encode(frame) & "\n"
+      writeFile("condensed.frames", buffer)
+      return frames
+    else:
+      return frames
+  else:
+    echo "Loading condensed frames file"
+
+    var 
+      starttime = cpuTime()
+      cond = readFile("condensed.frames")
+
+    echo fmt"Reading file took {(cpuTime() - starttime ) * 1000}ms"
+    echo "Splitting file"
+
+    var 
+      splitstarttime = cpuTime()
+      parseCond = cond.split("\n")
+      donetime = (cpuTime() - splitstarttime ) * 1000
+
+    echo fmt"Splitting file took {donetime}ms"
+    echo fmt"Parsing {parseCond.len} frames"
+
+    for i, f in parseCond:
+      
+      frames.add f.decode
+
+    echo fmt"Total loading time: {(cpuTime() - starttime ) * 1000}ms"
+
+    return frames
 
 var 
-  frameseq = frameLoader("./frames")
+  frameseq = frameLoader(framefolder, doCondense, readCondensed)
   threadframes {.threadvar.}: seq[string]
   cont* = true
 
-proc leArtist*() =
+proc leArtist*() {.thread.} =
   {.gcsafe.}:
     deepcopy(threadframes, frameseq)  
   hideCursor()
@@ -67,36 +123,29 @@ proc leArtist*() =
       echo "\n\x1b[0m" & fmt"Frame time: {delta * 1000}ms"
 
       # Calculate how long we need to wait in order to maintain a smooth 24
-      var ftime = int( (1000/24) - (delta * 1000))
+      var ftime = int( (1000/framerate) - (delta * 1000))
       if ftime < 0: sleeptime = 0
       else: sleeptime = ftime
 
-      echo "\n\x1b[0m" & fmt"Waiting {sleeptime}ms"
       sleep sleeptime 
   write stdout, "\x1b[0m"
-
-
-
 
 proc main() =
 
   # Start playing audio when we are about to do something that takes awhile
   slappyInit()
   var 
-    sound = newSound("tmp/bna.wav")
+    sound = newSound(soundfile)
     source = sound.play()
 
-  # Uncomment if you want to loop your audio
-  #source.looping = true
+  source.looping = loopAudio
 
   var spawned: Thread[void]
   createThread(spawned, leArtist)
 
-  # Simulate doing something for 4 minutes
-  sleep 240000
+  # Simulate doing something for awhile
+  sleep(sleeptime)
   cont = false
-  # give us a moment to catch up
-  # continue doing other stuff
   
   slappyClose()
 
@@ -106,6 +155,4 @@ main()
 resetAttributes()
 eraseScreen()
 showCursor()
-
-echo "Press any key to exit"
 discard getch()

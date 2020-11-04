@@ -5,3 +5,6 @@ tmp/*
 test/
 eva/
 *dist*
+eva2/
+temp/
+*.frames
